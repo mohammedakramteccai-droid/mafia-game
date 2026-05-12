@@ -524,7 +524,7 @@ app.get('/api/rooms', (req, res) => {
 });
 
 // SPA catch-all: serve client for any non-API route
-app.get('*', (req, res) => {
+app.get('/{*splat}', (req, res) => {
   res.sendFile(path.join(clientBuildPath, 'index.html'));
 });
 
