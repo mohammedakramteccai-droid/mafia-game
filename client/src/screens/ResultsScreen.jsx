@@ -1,5 +1,41 @@
 import { useGameStore } from '../store';
 import { useT, CARD_INFO } from '../utils';
+import { motion } from 'framer-motion';
+import { useState, useEffect } from 'react';
+
+function Confetti() {
+  const [particles] = useState(() =>
+    Array.from({ length: 40 }, (_, i) => ({
+      id: i,
+      x: Math.random() * 100,
+      color: ['#f6c247', '#ef3948', '#22d6b5', '#5b9df7', '#8d65ff', '#ff9f43'][Math.floor(Math.random() * 6)],
+      size: Math.random() * 6 + 4,
+      delay: Math.random() * 2,
+      duration: Math.random() * 2 + 2,
+    }))
+  );
+
+  return (
+    <div className="confetti-container" aria-hidden="true">
+      {particles.map(p => (
+        <motion.div
+          key={p.id}
+          className="confetti-piece"
+          style={{
+            left: `${p.x}%`,
+            width: p.size,
+            height: p.size * 1.5,
+            backgroundColor: p.color,
+            borderRadius: Math.random() > 0.5 ? '50%' : '2px',
+          }}
+          initial={{ y: -20, opacity: 1, rotate: 0 }}
+          animate={{ y: '100vh', opacity: 0, rotate: Math.random() * 720 - 360 }}
+          transition={{ duration: p.duration, delay: p.delay, ease: 'easeIn', repeat: Infinity, repeatDelay: p.delay }}
+        />
+      ))}
+    </div>
+  );
+}
 
 export default function ResultsScreen({ result, onNavigate }) {
   const { language, clearRoom } = useGameStore();
@@ -16,55 +52,103 @@ export default function ResultsScreen({ result, onNavigate }) {
   };
 
   return (
-    <div className="page page-center" dir={dir}>
-      {/* Winner Banner */}
-      <div style={{
-        textAlign: 'center', padding: '32px 24px', marginBottom: 24,
-        background: isMafiaWin
-          ? 'linear-gradient(135deg,rgba(230,57,70,0.15),rgba(150,10,20,0.2))'
-          : 'linear-gradient(135deg,rgba(15,244,198,0.1),rgba(72,149,239,0.15))',
-        border: `1px solid ${isMafiaWin ? 'rgba(230,57,70,0.4)' : 'rgba(15,244,198,0.4)'}`,
-        borderRadius: 24,
-        boxShadow: isMafiaWin ? '0 0 60px rgba(230,57,70,0.2)' : '0 0 60px rgba(15,244,198,0.15)',
-        animation: 'fadeIn 0.6s ease',
-      }}>
-        <div style={{ fontSize: '5rem', marginBottom: 12 }}>
-          {isMafiaWin ? '🔴' : '✅'}
-        </div>
-        <h1 className="font-black" style={{ fontSize: '2rem', marginBottom: 8 }}>
-          {isMafiaWin ? t('mafiaWins') : t('citizensWin')}
-        </h1>
-        <p className="text-muted">{t('gameOver')}</p>
-      </div>
+    <div className="page page-center results-shell" dir={dir}>
+      <Confetti />
 
-      {/* Players reveal */}
-      <div className="glass-card" style={{ marginBottom: 20, width: '100%' }}>
+      <motion.div
+        className={`winner-banner ${isMafiaWin ? 'mafia-win' : 'citizen-win'}`}
+        initial={{ opacity: 0, scale: 0.8, y: 30 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ type: 'spring', stiffness: 200, damping: 18 }}
+      >
+        <motion.div
+          className="winner-icon"
+          aria-hidden="true"
+          animate={{ scale: [1, 1.15, 1], rotate: [0, 5, -5, 0] }}
+          transition={{ duration: 2, repeat: Infinity }}
+        >
+          {isMafiaWin ? '🔴' : '✅'}
+        </motion.div>
+        <motion.h1
+          className="font-black text-xl mb-1"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+        >
+          {isMafiaWin ? t('mafiaWins') : t('citizensWin')}
+        </motion.h1>
+        <motion.p
+          className="text-muted"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+        >
+          {t('gameOver')}
+        </motion.p>
+      </motion.div>
+
+      <motion.div
+        className="glass-card w-full mb-3"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.4 }}
+      >
         <div className="form-label mb-2">🃏 {t('revealCards')}</div>
-        <div className="flex flex-col gap-1">
-          {result.players?.map(p => {
+        <div className="reveal-list">
+          {result.players?.map((p, i) => {
             const ci = CARD_INFO[p.card] || {};
             return (
-              <div key={p.id} className={`player-chip ${!p.isAlive ? 'dead' : ''}`}
-                style={{ borderColor: p.isAlive ? ci.color + '44' : 'transparent' }}>
+              <motion.div
+                key={p.id}
+                className={`player-chip ${!p.isAlive ? 'dead' : ''}`}
+                style={{ borderColor: p.isAlive ? `${ci.color}66` : undefined }}
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.5 + i * 0.08, type: 'spring', stiffness: 300 }}
+                whileHover={{ borderColor: ci.color, x: 4 }}
+              >
                 <span className="player-avatar">{p.avatar || '👤'}</span>
                 <span className="player-name">{p.username}</span>
-                <span style={{ fontSize: '1.2rem' }}>{ci.emoji}</span>
-                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: ci.color }}>{t(p.card)}</span>
+                <motion.span
+                  className="role-pill"
+                  style={{ color: ci.color }}
+                  initial={{ opacity: 0, scale: 0.7 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.7 + i * 0.08 }}
+                >
+                  <span aria-hidden="true">{ci.emoji}</span>
+                  <span>{t(p.card)}</span>
+                </motion.span>
                 {!p.isAlive && <span className="player-badge badge-dead">💀</span>}
-              </div>
+              </motion.div>
             );
           })}
         </div>
-      </div>
+      </motion.div>
 
-      <div className="flex flex-col gap-2 w-full">
-        <button className="btn btn-primary btn-lg btn-full" onClick={handlePlayAgain}>
+      <motion.div
+        className="flex flex-col gap-2 w-full"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.7 }}
+      >
+        <motion.button
+          className="btn btn-primary btn-lg btn-full"
+          onClick={handlePlayAgain}
+          whileHover={{ scale: 1.02, boxShadow: '0 16px 48px rgba(239, 57, 72, 0.35)' }}
+          whileTap={{ scale: 0.98 }}
+        >
           🔄 {t('playAgain')}
-        </button>
-        <button className="btn btn-ghost btn-full" onClick={handlePlayAgain}>
+        </motion.button>
+        <motion.button
+          className="btn btn-ghost btn-full"
+          onClick={handlePlayAgain}
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+        >
           🏠 {t('backHome')}
-        </button>
-      </div>
+        </motion.button>
+      </motion.div>
     </div>
   );
 }
