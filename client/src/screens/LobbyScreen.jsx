@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGameStore } from '../store';
 import { useT } from '../utils';
@@ -46,7 +46,6 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
     }
   };
 
-  // Ø¥Ø°Ø§ Ù„Ù… ØªÙƒÙ† Ø§Ù„ØºØ±ÙØ© Ù…Ø­Ù…Ù„Ø© Ø¨Ø¹Ø¯ - spinner
   if (!room) {
     return (
       <div className="page page-center" dir={dir}>
@@ -61,7 +60,7 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
             animate={{ rotate: 360 }}
             transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
           >
-            â³
+            ⏳
           </motion.div>
           <p className="text-muted">{t('loading')}</p>
         </motion.div>
@@ -80,11 +79,11 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
           <motion.button
             className="btn btn-ghost btn-sm icon-btn"
             onClick={() => onNavigate('home')}
-            aria-label={language === 'ar' ? 'Ø±Ø¬ÙˆØ¹' : 'Back'}
+            aria-label={language === 'ar' ? 'رجوع' : 'Back'}
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
           >
-            â†
+            ←
           </motion.button>
           <div className="topbar-title">
             <div className="screen-kicker">{t('waitingPlayers')}</div>
@@ -117,7 +116,7 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
             <motion.button
               className="room-code"
               onClick={copyCode}
-              title="Ø§Ù†Ù‚Ø± Ù„Ù„Ù†Ø³Ø®"
+              title="انقر للنسخ"
               whileHover={{ scale: 1.02, borderColor: 'rgba(246, 194, 71, 1)' }}
               whileTap={{ scale: 0.98 }}
             >
@@ -139,10 +138,10 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
                 onClick={copyCode}
                 whileTap={{ scale: 0.95 }}
               >
-                {copied ? `âœ… ${t('copied')}` : `ðŸ“‹ ${t('copyCode')}`}
+                {copied ? `✅ ${t('copied')}` : `📋 ${t('copyCode')}`}
               </motion.button>
               <span className="room-meta-pill">
-                {room.accessType === 'public' ? `ðŸŒ ${t('public')}` : `ðŸ”’ ${t('private')}`}
+                {room.accessType === 'public' ? `🌐 ${t('public')}` : `🔒 ${t('private')}`}
               </span>
             </div>
           </motion.div>
@@ -168,7 +167,7 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
                   animate={{ ...fadeUp.animate, opacity: [0.6, 1, 0.6] }}
                   transition={{ duration: 2, repeat: Infinity }}
                 >
-                  â³ {language === 'ar' ? `ØªØ­ØªØ§Ø¬ ${needed} Ù„Ø§Ø¹Ø¨${needed > 1 ? 'ÙŠÙ†' : ''} Ø£ÙƒØ«Ø±` : `Need ${needed} more player${needed > 1 ? 's' : ''}`}
+                  ⏳ {language === 'ar' ? `تحتاج ${needed} لاعب${needed > 1 ? 'ين' : ''} أكثر` : `Need ${needed} more player${needed > 1 ? 's' : ''}`}
                 </motion.p>
               )}
             </AnimatePresence>
@@ -176,16 +175,16 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
 
           <div className="glass-card">
             <div className="stat-grid">
-              <Stat icon="ðŸ‘¥" label={t('maxPlayers')} value={room.maxPlayers} />
-              <Stat icon="ðŸ”´" label={t('mafia')} value={room.mafiaCount} />
-              <Stat icon="ðŸ¤–" label={t('hostType')} value={room.hostType === 'bot' ? t('botHost') : t('playerHost')} />
-              <Stat icon="â±ï¸" label={t('discussionTime')} value={`${room.discussionTime}s`} />
+              <Stat icon="👥" label={t('maxPlayers')} value={room.maxPlayers} />
+              <Stat icon="🔴" label={t('mafia')} value={room.mafiaCount} />
+              <Stat icon="🤖" label={t('hostType')} value={room.hostType === 'bot' ? t('botHost') : t('playerHost')} />
+              <Stat icon="⏱️" label={t('discussionTime')} value={`${room.discussionTime}s`} />
             </div>
             <div className="enabled-card-row">
-              {room.enabledCards?.vigilante && <CardBadge emoji="ðŸ”«" label={t('vigilante')} />}
-              {room.enabledCards?.silencer  && <CardBadge emoji="ðŸ¤" label={t('silencer')} />}
-              {room.enabledCards?.mayor     && <CardBadge emoji="ðŸ‘‘" label={t('mayor')} />}
-              {room.enabledCards?.goodBoy   && <CardBadge emoji="ðŸ˜‡" label={t('goodBoy')} />}
+              {room.enabledCards?.vigilante && <CardBadge emoji="🔫" label={t('vigilante')} />}
+              {room.enabledCards?.silencer  && <CardBadge emoji="🤐" label={t('silencer')} />}
+              {room.enabledCards?.mayor     && <CardBadge emoji="👑" label={t('mayor')} />}
+              {room.enabledCards?.goodBoy   && <CardBadge emoji="😇" label={t('goodBoy')} />}
             </div>
           </div>
         </motion.section>
@@ -217,10 +216,10 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
                     className="player-avatar"
                     whileHover={{ scale: 1.2, rotate: 10 }}
                   >
-                    {p.avatar || 'ðŸ‘¤'}
+                    {p.avatar || '👤'}
                   </motion.span>
                   <span className="player-name">{p.username}</span>
-                  {p.isHost && <span className="player-badge badge-host">ðŸ‘‘ {t('host')}</span>}
+                  {p.isHost && <span className="player-badge badge-host">👑 {t('host')}</span>}
                   {p.username === username && !p.isHost && <span className="player-badge badge-you">{t('you')}</span>}
                 </motion.div>
               ))}
@@ -232,9 +231,9 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
                 animate={{ opacity: [0.3, 0.55, 0.3] }}
                 transition={{ duration: 2, repeat: Infinity, delay: i * 0.3 }}
               >
-                <span className="player-avatar">ðŸ‘¤</span>
+                <span className="player-avatar">👤</span>
                 <span className="player-name text-muted">
-                  {language === 'ar' ? 'ÙÙŠ Ø§Ù†ØªØ¸Ø§Ø± Ù„Ø§Ø¹Ø¨...' : 'Waiting for player...'}
+                  {language === 'ar' ? 'في انتظار لاعب...' : 'Waiting for player...'}
                 </span>
               </motion.div>
             ))}
@@ -259,8 +258,8 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
             transition={canStart ? { duration: 2, repeat: Infinity } : {}}
           >
             {starting ? (
-              <motion.span animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>â³</motion.span>
-            ) : 'â–¶'} {t('startGame')}
+              <motion.span animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>⏳</motion.span>
+            ) : '▶'} {t('startGame')}
           </motion.button>
         )}
 
@@ -270,7 +269,7 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
             animate={{ opacity: [0.6, 1, 0.6] }}
             transition={{ duration: 2, repeat: Infinity }}
           >
-            <p className="text-muted">â³ {t('waitingPlayers')}...</p>
+            <p className="text-muted">⏳ {t('waitingPlayers')}...</p>
           </motion.div>
         )}
       </motion.div>
@@ -304,4 +303,3 @@ function CardBadge({ emoji, label }) {
     </motion.span>
   );
 }
-
