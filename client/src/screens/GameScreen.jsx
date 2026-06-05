@@ -4,13 +4,13 @@ import { useGameStore } from '../store';
 import { useT, CARD_INFO } from '../utils';
 
 export default function GameScreen({ onGameOver }) {
-  const { room, myCard, mafiaTeam, validTargets, investigationResult, goodBoyMode, username,
-          language, socket, sendNightAction, sendVote, startVoting, skipVote, revealMayor, sendGoodBoyPick } = useGameStore();
+  const { room, myCard, mafiaTeam, validTargets, currentTurn, investigationResult, investigationHistory, username,
+          actionSubmitted, language, socket, sendReady, sendNightAction, sendVote, startVoting, showNotification } = useGameStore();
   const t = useT(language);
   const dir = language === 'ar' ? 'rtl' : 'ltr';
 
   const fallbackTargets = room?.players.filter(p => p.isAlive && p.username !== username) || [];
-  const nightTargets = validTargets.length > 0 ? validTargets : fallbackTargets;
+  const nightTargets = currentTurn?.targets?.length ? currentTurn.targets : (validTargets.length > 0 ? validTargets : fallbackTargets);
   const voteTargets = room?.players.filter(p => p.isAlive && p.username !== username) || [];
   const aliveAll = room?.players.filter(p => p.isAlive) || [];
 
@@ -32,6 +32,7 @@ export default function GameScreen({ onGameOver }) {
   const phase = room?.phase;
   const discussionTime = room?.discussionTime || 180;
   const tiedIds = tieInfo?.tiedPlayers?.map(p => typeof p === 'string' ? p : p.id) || [];
+  const isCardReveal = phase === 'card_reveal';
 
   useEffect(() => {
     if (phase === 'day') {
@@ -55,6 +56,16 @@ export default function GameScreen({ onGameOver }) {
       setActionSent(false); setSelectedTarget(null); setBotStep('sleep');
       setDayInfo(null); setElimInfo(null); setTieInfo(null);
     });
+    socket.on('game:night_stage', () => {
+      setActionSent(false); setSelectedTarget(null); setBotStep('sleep');
+    });
+    socket.on('game:mafia_consensus_failed', () => {
+      setActionSent(false); setSelectedTarget(null);
+      showNotification(t('mafiaConsensusFailed'), 'warning', 4000);
+    });
+    socket.on('game:error', (data) => {
+      showNotification(data?.code === 'NOT_YOUR_TURN' ? t('notYourTurn') : (data?.message || t('error')), 'error');
+    });
     socket.on('game:vote_update', setVoteCount);
     socket.on('game:vote_tie', (data) => setTieInfo(data));
     socket.on('game:player_eliminated', (data) => setElimInfo(data));
@@ -62,42 +73,40 @@ export default function GameScreen({ onGameOver }) {
     socket.on('game:over', onGameOver);
     return () => {
       socket.off('game:day_start'); socket.off('game:night_start');
+      socket.off('game:night_stage'); socket.off('game:mafia_consensus_failed'); socket.off('game:error');
       socket.off('game:vote_update'); socket.off('game:vote_tie');
       socket.off('game:player_eliminated'); socket.off('game:vote_skipped');
       socket.off('game:over');
     };
-  }, [socket, onGameOver, discussionTime]);
+  }, [socket, onGameOver, discussionTime, showNotification, t]);
 
   const handleNightAction = () => {
     if (!selectedTarget || actionSent) return;
-    const actionType = myCard === 'mafia' ? 'mafia'
-      : myCard === 'doctor' ? 'doctor'
-      : myCard === 'detective' ? 'detective'
-      : myCard === 'vigilante' ? 'vigilante'
-      : myCard === 'silencer' ? 'silencer' : null;
+    const actionType = currentTurn?.actionType;
     if (!actionType) return;
     sendNightAction(actionType, selectedTarget);
     setActionSent(true);
   };
 
   const handleVote = () => { if (!selectedTarget) return; sendVote(selectedTarget); setActionSent(true); };
-  const handleSkip = () => { skipVote(); setActionSent(true); };
-  const handleGoodBoyPick = () => { if (!selectedTarget) return; sendGoodBoyPick(selectedTarget); setActionSent(true); };
+  const handleSkip = () => { sendVote(null); setActionSent(true); };
 
-  const nightRoles = [
-    myCard === 'mafia' && { card: 'mafia', label: t('mafiaChoose') },
-    myCard === 'detective' && { card: 'detective', label: t('detectiveChoose') },
-    myCard === 'doctor' && { card: 'doctor', label: t('doctorChoose') },
-    myCard === 'vigilante' && room?.enabledCards?.vigilante && { card: 'vigilante', label: t('vigilanteChoose') },
-    myCard === 'silencer' && room?.enabledCards?.silencer && { card: 'silencer', label: t('silencerChoose') },
-  ].filter(Boolean);
+  const nightStageLabels = {
+    mafia: t('mafiaChoose'),
+    doctor: t('doctorChoose'),
+    detective: t('detectiveChoose'),
+  };
+  const nightRoles = currentTurn ? [{ card: currentTurn.stage, label: nightStageLabels[currentTurn.stage] || t('chooseTarget') }] : [];
 
   const hasNightAction = nightRoles.length > 0;
-  const villagerNight = myCard === 'villager' || (!hasNightAction && phase === 'night');
-  const phaseKind = phase === 'goodboy' ? 'goodboy' : (phase || 'day');
+  const villagerNight = phase === 'night' && !hasNightAction;
+  const phaseKind = isCardReveal ? 'day' : (phase || 'day');
   const phaseClass = phase === 'night' ? 'phase-night' : phase === 'voting' || phase === 'goodboy' ? 'phase-voting' : 'phase-day';
-  const phaseIcon = phase === 'night' ? '🌙' : phase === 'voting' ? '🗳️' : phase === 'goodboy' ? '😇' : '☀️';
-  const phaseTitle = phase === 'night' ? t('nightPhase') : phase === 'voting' ? t('votingPhase') : phase === 'goodboy' ? t('goodBoy') : t('dayPhase');
+  const phaseIcon = isCardReveal ? '🎴' : phase === 'night' ? '🌙' : phase === 'voting' ? '🗳️' : '☀️';
+  const phaseTitle = isCardReveal ? t('cardRevealPhase') : phase === 'night' ? t('nightPhase') : phase === 'voting' ? t('votingPhase') : t('dayPhase');
+  const phaseSubtitle = isCardReveal
+    ? `${room?.readyCount || 0}/${room?.players.length || 0} ${t('readyPlayers')}`
+    : `${t('round')} ${room?.round || 0}`;
 
   return (
     <div className={`game-shell phase-${phaseKind}`} dir={dir}>
@@ -120,7 +129,7 @@ export default function GameScreen({ onGameOver }) {
             </motion.div>
             <div>
               <div className="phase-title">{phaseTitle}</div>
-              <div className="phase-subtitle">{t('round')} {room?.round || 0}</div>
+              <div className="phase-subtitle">{phaseSubtitle}</div>
             </div>
           </div>
           <motion.span
@@ -158,15 +167,11 @@ export default function GameScreen({ onGameOver }) {
                     <div className="role-desc" style={{ color: cardInfo.color || undefined }}>{cardDesc}</div>
                   )}
                 </div>
-                {myCard === 'mayor' && !me?.mayorRevealed && (
-                  <motion.button className="btn btn-gold btn-sm" onClick={revealMayor} whileTap={{ scale: 0.95 }}>
-                    {t('revealMayor')}
-                  </motion.button>
-                )}
+
               </div>
             </motion.div>
 
-            {myCard === 'mafia' && mafiaTeam && mafiaTeam.length > 1 && (
+            {CARD_INFO[myCard]?.team === 'mafia' && mafiaTeam && mafiaTeam.length > 1 && (
               <motion.div className="glass-card team-strip" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}>
                 <div className="form-label mb-2">{t('mafiaTeam')}</div>
                 <div className="team-members">
@@ -177,7 +182,42 @@ export default function GameScreen({ onGameOver }) {
               </motion.div>
             )}
 
-            {(phase === 'day' || phase === 'voting') && (
+            {myCard === 'detective' && (
+              <motion.div className="glass-card" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}>
+                <div className="section-title" style={{ marginBottom: '8px' }}>🔍 {t('investigationLog')}</div>
+                <div className="player-roster">
+                  {room?.players.filter(p => p.id !== me?.id).map(p => {
+                    const inv = investigationHistory?.find(i => i.targetId === p.id);
+                    return (
+                      <motion.div
+                        key={p.id}
+                        className={`player-chip ${!p.isAlive ? 'dead' : ''}`}
+                        style={inv ? {
+                          borderColor: inv.result === 'mafia' ? 'rgba(239,57,72,0.6)' : 'rgba(15,244,198,0.6)',
+                          background: inv.result === 'mafia' ? 'rgba(239,57,72,0.12)' : 'rgba(15,244,198,0.12)',
+                        } : { borderColor: 'rgba(255,255,255,0.08)' }}
+                        layout
+                      >
+                        <span className="player-avatar">{inv ? (inv.result === 'mafia' ? '🔴' : '✅') : '❓'}</span>
+                        <span className="player-name">{p.username}</span>
+                        {!p.isAlive && <span className="player-badge badge-dead">💀</span>}
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            )}
+
+            {myCard === 'doctor' && (
+              <motion.div className="glass-card" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}>
+                <div className="section-title" style={{ marginBottom: '4px' }}>💊 {t('doctor')}</div>
+                <p style={{ color: 'var(--text-muted, #8888aa)', fontSize: '0.85rem', margin: 0 }}>{t('doctorPanelInfo')}</p>
+              </motion.div>
+            )}
+
+
+
+            {(isCardReveal || phase === 'day' || phase === 'voting' || phase === 'night') && (
               <div className="glass-card">
                 <div className="flex justify-between items-center mb-2">
                   <div className="section-title mb-0">{t('players')}</div>
@@ -193,8 +233,8 @@ export default function GameScreen({ onGameOver }) {
                     >
                       <span className="player-avatar">{p.avatar || '👤'}</span>
                       <span className="player-name">{p.username}</span>
+                      {isCardReveal && p.isReady && <span className="player-badge badge-you">{t('ready')}</span>}
                       {!p.isAlive && <span className="player-badge badge-dead">💀</span>}
-                      {p.mayorRevealed && <span className="player-badge badge-host">👑</span>}
                     </motion.div>
                   ))}
                 </div>
@@ -203,21 +243,21 @@ export default function GameScreen({ onGameOver }) {
           </aside>
 
           <main className="game-main">
-            <AnimatePresence>
-              {investigationResult && myCard === 'detective' && (
-                <motion.div
-                  className={`scene-card text-center ${investigationResult.result === 'mafia' ? 'accent-red' : 'accent-teal'}`}
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ type: 'spring', stiffness: 300 }}
+            {isCardReveal && (
+              <motion.div className="scene-card accent-gold text-center" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+                <div className="scene-icon" aria-hidden="true">🎴</div>
+                <h3 className="font-black mb-2">{t('cardRevealPhase')}</h3>
+                <p className="text-muted mb-2">{t('cardRevealPrompt')}</p>
+                <motion.button
+                  className={`btn btn-full btn-lg ${me?.isReady ? 'btn-ghost' : 'btn-gold'}`}
+                  onClick={sendReady}
+                  disabled={me?.isReady}
+                  whileTap={!me?.isReady ? { scale: 0.97 } : {}}
                 >
-                  <p className={investigationResult.result === 'mafia' ? 'text-red font-black' : 'text-teal font-black'}>
-                    {investigationResult.result === 'mafia' ? t('investigationMafia') : t('investigationCitizen')}
-                  </p>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                  {me?.isReady ? `✅ ${t('readyWaiting')}` : `✅ ${t('ready')}`}
+                </motion.button>
+              </motion.div>
+            )}
 
             {phase === 'night' && (
               <>
@@ -256,26 +296,51 @@ export default function GameScreen({ onGameOver }) {
                   </motion.div>
                 )}
 
-                {(!isBotHost || botStep === 'action') && hasNightAction && (
-                  <motion.div className="scene-card accent-red" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                    <div className="section-title">{nightRoles[0]?.label}</div>
-                    <PlayerSelector players={nightTargets} selected={selectedTarget} onSelect={setSelectedTarget} disabled={actionSent} />
-                    {!actionSent ? (
-                      <motion.button className="btn btn-primary btn-full mt-2" onClick={handleNightAction} disabled={!selectedTarget} whileTap={{ scale: 0.97 }}>
-                        ✅ {t('confirm')}
-                      </motion.button>
-                    ) : (
-                      <motion.p className="text-teal text-center mt-2 font-bold" animate={{ opacity: [0.5, 1, 0.5] }} transition={{ duration: 1.5, repeat: Infinity }}>
-                        ✅ {t('waitingForAction')}
-                      </motion.p>
+                {phase === 'night' && me?.isAlive && (
+                  <motion.div className="scene-card accent-blue" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
+                    <div className="scene-icon">🌙</div>
+                    <h3 className="font-black mb-2">{t('nightPhase')}</h3>
+                    <p className="text-muted">{t('nightPrompt')}</p>
+                    {actionSubmitted && (
+                      <motion.div className="mt-4 p-4 rounded-lg bg-blue-900/40 text-blue-300 border border-blue-500/30"
+                                  initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                        <p className="font-bold">✅ تم تسجيل اختيارك.</p>
+                        <p className="text-sm opacity-80 mt-1">بانتظار بقية اللاعبين لإنهاء الليل...</p>
+                      </motion.div>
                     )}
+                    {!actionSubmitted && currentTurn && (
+                      <motion.div className="mt-4" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+                        <h4 className="font-bold mb-3">{currentTurn.actionType === 'mafia' ? t('chooseVictim') : t('chooseTarget')}</h4>
+                        <div className="target-grid">
+                          {currentTurn.targets.map(target => (
+                            <motion.button
+                              key={target.id}
+                              className="btn btn-outline"
+                              onClick={() => sendNightAction(target.id)}
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                            >
+                              {target.avatar || '👤'} {target.username}
+                            </motion.button>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+                  </motion.div>
+                )}
+
+                {phase === 'night' && !me?.isAlive && (
+                  <motion.div className="scene-card accent-gray" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                    <div className="scene-icon">👻</div>
+                    <h3 className="font-black mb-2">أنت ميت</h3>
+                    <p className="text-muted mb-2">القرية نائمة الآن... وأنت أيضاً.</p>
                   </motion.div>
                 )}
 
                 {villagerNight && !isBotHost && (
                   <motion.div className="scene-card text-center" animate={{ opacity: [0.6, 1, 0.6] }} transition={{ duration: 2, repeat: Infinity }}>
                     <div className="scene-icon" aria-hidden="true">😴</div>
-                    <p className="text-muted">{t('closeEyes')}</p>
+                    <p className="text-muted mt-4 font-bold">{t('waitingForVotes')}</p>
                   </motion.div>
                 )}
               </>
@@ -296,9 +361,12 @@ export default function GameScreen({ onGameOver }) {
                 ) : (
                   <motion.p className="text-teal font-bold" initial={{ scale: 0.8 }} animate={{ scale: 1 }}>{t('noDeath')}</motion.p>
                 )}
-                {dayInfo.silencedPlayer && (
-                  <p className="text-muted text-sm mt-2">🤐 {room?.players.find(p => p.id === dayInfo.silencedPlayer)?.username} {t('isMuted')}</p>
+                {dayInfo.wasSaved && (
+                  <motion.div className="event-row text-teal mt-2" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+                    💊 {t('someoneSaved')}
+                  </motion.div>
                 )}
+
                 {timer > 0 && (
                   <motion.div className="timer-card" animate={{ borderColor: timer < 30 ? ['rgba(239,57,72,0.5)', 'rgba(239,57,72,0.2)'] : 'rgba(246,194,71,0.28)' }} transition={timer < 30 ? { duration: 1, repeat: Infinity } : {}}>
                     <div className="timer-display">{Math.floor(timer / 60)}:{String(timer % 60).padStart(2, '0')}</div>
@@ -360,19 +428,9 @@ export default function GameScreen({ onGameOver }) {
               </motion.div>
             )}
 
-            {goodBoyMode && (
-              <motion.div className="scene-card accent-teal" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-                <h3 className="font-black text-center mb-2 text-teal">😇 {t('goodBoyChoose')}</h3>
-                <PlayerSelector players={aliveAll} selected={selectedTarget} onSelect={setSelectedTarget} disabled={actionSent} />
-                {!actionSent && (
-                  <motion.button className="btn btn-teal btn-full mt-2" onClick={handleGoodBoyPick} disabled={!selectedTarget} whileTap={{ scale: 0.97 }}>
-                    ✅ {t('confirm')}
-                  </motion.button>
-                )}
-              </motion.div>
-            )}
 
-            {phase === 'day' && isHost && (
+
+            {phase === 'day' && me?.isAlive && (
               <motion.button
                 className="btn btn-gold btn-full btn-lg"
                 onClick={() => { startVoting(); }}

@@ -7,10 +7,6 @@ const CARDS = {
   detective: { id: 'detective', team: 'citizens', emoji: '🔍', required: true },
   doctor: { id: 'doctor', team: 'citizens', emoji: '💊', required: true },
   villager: { id: 'villager', team: 'citizens', emoji: '👤', required: true },
-  vigilante: { id: 'vigilante', team: 'citizens', emoji: '🔫', required: false },
-  silencer: { id: 'silencer', team: 'mafia', emoji: '🤐', required: false },
-  mayor: { id: 'mayor', team: 'citizens', emoji: '👑', required: false },
-  goodBoy: { id: 'goodBoy', team: 'citizens', emoji: '😇', required: false },
 };
 
 function generateRoomCode() {
@@ -32,27 +28,17 @@ function shuffleArray(array) {
 }
 
 function assignCards(players, settings) {
-  const { mafiaCount, enabledCards } = settings;
+  const { mafiaCount } = settings;
   const playerCount = players.length;
 
   const cardPool = [];
 
-  // البطاقات الإلزامية:
-  // القاتل الصامت يُحسب ضمن عدد القتلة (mafiaCount).
-  // إذا كان مفعّلاً: ورقة واحدة silencer + (mafiaCount - 1) ورقة mafia عادية.
-  if (enabledCards.silencer && mafiaCount >= 1) {
-    cardPool.push('silencer');                           // 1 قاتل صامت
-    for (let i = 0; i < mafiaCount - 1; i++) cardPool.push('mafia'); // الباقي مافيا عادية
-  } else {
-    for (let i = 0; i < mafiaCount; i++) cardPool.push('mafia');     // كل القتلة مافيا عادية
-  }
+  // بطاقات المافيا
+  for (let i = 0; i < mafiaCount; i++) cardPool.push('mafia');
+
+  // البطاقات الإلزامية
   cardPool.push('detective');
   cardPool.push('doctor');
-
-  // البطاقات الاختيارية (باستثناء silencer الذي عولج أعلاه)
-  if (enabledCards.vigilante) cardPool.push('vigilante');
-  if (enabledCards.mayor)     cardPool.push('mayor');
-  if (enabledCards.goodBoy)   cardPool.push('goodBoy');
 
   // ملء البقية بـ villager
   const remaining = playerCount - cardPool.length;
@@ -66,11 +52,11 @@ function assignCards(players, settings) {
   return assigned;
 }
 
-// الأهداف الصالحة لكل دور (المافيا لا تختار من فريقها)
+// الأهداف الصالحة لكل دور
 function getValidTargets(player, players) {
   const aliveOthers = players.filter(p => p.isAlive && p.id !== player.id);
-  // المافيا والقاتل الصامت لا يستهدفان أحداً من فريق المافيا
-  if (player.card === 'mafia' || player.card === 'silencer') {
+  // المافيا لا تستهدف فريق المافيا (للقتل)
+  if (player.card === 'mafia') {
     return aliveOthers.filter(p => CARDS[p.card]?.team !== 'mafia');
   }
   return aliveOthers;
@@ -95,10 +81,7 @@ function calculateVotes(votes, players) {
 
   Object.entries(votes).forEach(([voterId, targetId]) => {
     if (!targetId || !voteCounts.hasOwnProperty(targetId)) return;
-    const voter = players.find(p => p.id === voterId);
-    if (!voter) return;
-    const weight = voter.card === 'mayor' && voter.mayorRevealed ? 3 : 1;
-    voteCounts[targetId] = (voteCounts[targetId] || 0) + weight;
+    voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
   });
 
   // Find max
@@ -125,13 +108,10 @@ function processNightActions(nightActions, players, settings) {
     saved: false,
     investigated: null,
     investigationResult: null,
-    silenced: null,
-    vigilanteKilled: null,
-    vigilanteDied: false,
     messages: []
   };
 
-  const { mafiaTarget, doctorTarget, detectiveTarget, vigilanteTarget, silencerTarget } = nightActions;
+  const { mafiaTarget, doctorTarget, detectiveTarget } = nightActions;
 
   // Mafia kill
   if (mafiaTarget) {
@@ -151,25 +131,6 @@ function processNightActions(nightActions, players, settings) {
     if (target) {
       results.investigated = detectiveTarget;
       results.investigationResult = CARDS[target.card]?.team === 'mafia' ? 'mafia' : 'citizen';
-    }
-  }
-
-  // Silencer
-  if (silencerTarget && settings.enabledCards.silencer) {
-    results.silenced = silencerTarget;
-  }
-
-  // Vigilante
-  if (vigilanteTarget && settings.enabledCards.vigilante) {
-    const target = players.find(p => p.id === vigilanteTarget);
-    if (target) {
-      if (CARDS[target.card]?.team === 'mafia') {
-        results.vigilanteKilled = vigilanteTarget;
-      } else {
-        // Killed a citizen - both die
-        results.vigilanteKilled = vigilanteTarget;
-        results.vigilanteDied = true;
-      }
     }
   }
 

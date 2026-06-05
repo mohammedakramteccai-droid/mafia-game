@@ -10,15 +10,9 @@ const DEFAULT_SETTINGS = {
   maxPlayers: 8,
   mafiaCount: 2,
   discussionTime: 180,
-  enabledCards: { vigilante: false, silencer: false, mayor: false, goodBoy: false },
 };
 
-const OPTIONAL_CARDS = [
-  { key: 'vigilante', emoji: '🔫', nameAr: 'القناص', nameEn: 'Vigilante' },
-  { key: 'silencer',  emoji: '🤐', nameAr: 'القاتل الصامت', nameEn: 'Silencer' },
-  { key: 'mayor',     emoji: '👑', nameAr: 'العمدة', nameEn: 'Mayor' },
-  { key: 'goodBoy',   emoji: '😇', nameAr: 'الولد الصالح', nameEn: 'Good Boy' },
-];
+
 
 const fadeUp = {
   initial: { opacity: 0, y: 16 },
@@ -38,9 +32,6 @@ export default function CreateRoomScreen({ onNavigate, onRoomCreated }) {
   const [error, setError] = useState('');
 
   const set = (key, val) => setSettings(s => ({ ...s, [key]: val }));
-  const toggleCard = (key) => setSettings(s => ({
-    ...s, enabledCards: { ...s.enabledCards, [key]: !s.enabledCards[key] }
-  }));
 
   const handleCreate = async () => {
     if (!settings.roomName.trim()) return setError('أدخل اسم الغرفة');
@@ -184,40 +175,7 @@ export default function CreateRoomScreen({ onNavigate, onRoomCreated }) {
           </div>
         </motion.div>
 
-        <motion.div className="settings-card" variants={fadeUp} transition={{ duration: 0.4 }}>
-          <div className="section-title">{t('extraCards')}</div>
-          <div className="option-grid">
-            {OPTIONAL_CARDS.map((card, i) => (
-              <motion.button
-                key={card.key}
-                type="button"
-                className={`card-toggle ${settings.enabledCards[card.key] ? 'active' : ''}`}
-                onClick={() => toggleCard(card.key)}
-                aria-pressed={settings.enabledCards[card.key]}
-                whileHover={{ scale: 1.03, y: -2 }}
-                whileTap={{ scale: 0.97 }}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05, duration: 0.3 }}
-              >
-                <motion.span
-                  className="card-toggle-icon"
-                  aria-hidden="true"
-                  animate={settings.enabledCards[card.key] ? { rotate: [0, 15, -15, 0] } : {}}
-                  transition={{ duration: 0.4 }}
-                >
-                  {card.emoji}
-                </motion.span>
-                <span className="card-toggle-copy">{language === 'ar' ? card.nameAr : card.nameEn}</span>
-                <motion.span
-                  className={`toggle ${settings.enabledCards[card.key] ? 'on' : ''}`}
-                  aria-hidden="true"
-                  layout
-                />
-              </motion.button>
-            ))}
-          </div>
-        </motion.div>
+
 
         {error && (
           <motion.p

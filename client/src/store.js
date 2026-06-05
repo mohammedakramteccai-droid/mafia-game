@@ -22,20 +22,47 @@ function getOrCreateSocket(set, get) {
     get().showNotification('لاعب غادر الغرفة', 'warning');
   });
   _socket.on('game:card_assigned', ({ card, mafiaTeam, validTargets }) => {
-    set({ myCard: card, mafiaTeam, validTargets: validTargets || [] });
+    set({ myCard: card, mafiaTeam, validTargets: validTargets || [], currentTurn: null, investigationResult: null, investigationHistory: [] });
   });
   _socket.on('game:valid_targets_update', ({ validTargets }) => {
     set({ validTargets: validTargets || [] });
   });
-  // yourTurn (from mafia_game_dev_plan.md) - تحديث الأهداف كل ليلة
-  _socket.on('game:your_turn', ({ targets }) => {
-    set({ validTargets: targets || [] });
+  _socket.on('game:night_start', (data) => {
+    set({ 
+      currentTurn: null, 
+      turnQueue: [],
+      actionSubmitted: false,
+      investigationResult: null, 
+      room: { ...get().room, phase: 'night', round: data.round } 
+    });
+  });
+  _socket.on('game:night_stage', () => {
+    set({ currentTurn: null, validTargets: [] });
+  });
+  _socket.on('game:your_turn', (data) => {
+    set(state => {
+      const newQueue = [...state.turnQueue, data];
+      return { 
+        turnQueue: newQueue, 
+        currentTurn: state.currentTurn || data,
+        actionSubmitted: false
+      };
+    });
+    get().showNotification('حان دورك للعب!', 'info');
   });
   _socket.on('game:investigation_result', (data) => {
-    set({ investigationResult: data });
+    const history = get().investigationHistory;
+    set({ 
+      investigationResult: data,
+      investigationHistory: [...history, data]
+    });
+    get().showNotification(
+      data.result === 'mafia' ? `🔴 ${data.targetUsername}` : `✅ ${data.targetUsername}`,
+      data.result === 'mafia' ? 'error' : 'success',
+      5000
+    );
   });
-  _socket.on('game:goodboy_choice', () => set({ goodBoyMode: false }));
-  _socket.on('game:goodboy_pick', () => set({ goodBoyMode: true }));
+
 
   set({ socket: _socket });
   return _socket;
@@ -56,8 +83,12 @@ export const useGameStore = create((set, get) => ({
   myCard: null,
   mafiaTeam: null,
   validTargets: [],   // الأهداف الصالحة للاعب الحالي
+  currentTurn: null,
+  turnQueue: [],
+  actionSubmitted: false,
   investigationResult: null,
-  goodBoyMode: false,
+
+  investigationHistory: [],
 
   // Notifications
   notification: null,
@@ -87,7 +118,7 @@ export const useGameStore = create((set, get) => ({
 
   disconnect: () => {
     if (_socket) { _socket.disconnect(); _socket = null; }
-    set({ socket: null, connected: false, room: null, myCard: null, mafiaTeam: null });
+    set({ socket: null, connected: false, room: null, myCard: null, mafiaTeam: null, currentTurn: null, turnQueue: [], actionSubmitted: false });
   },
 
   // Room actions – auto-connect if needed
@@ -109,8 +140,21 @@ export const useGameStore = create((set, get) => ({
     _socket?.emit('game:start', {}, res);
   }),
 
-  sendNightAction: (actionType, targetId) => {
-    _socket?.emit('game:night_action', { actionType, targetId });
+  sendReady: () => {
+    _socket?.emit('game:player_ready');
+  },
+  sendNightAction: (targetId) => {
+    const { socket, currentTurn, turnQueue } = get();
+    if (!currentTurn) return;
+    
+    socket.emit('game:night_action', { actionType: currentTurn.actionType, targetId });
+    
+    const nextQueue = turnQueue.filter(t => t.actionType !== currentTurn.actionType);
+    if (nextQueue.length > 0) {
+      set({ turnQueue: nextQueue, currentTurn: nextQueue[0], actionSubmitted: false });
+    } else {
+      set({ turnQueue: [], currentTurn: null, actionSubmitted: true });
+    }
   },
   sendVote: (targetId) => {
     _socket?.emit('game:vote', { targetId });
@@ -121,12 +165,7 @@ export const useGameStore = create((set, get) => ({
   skipVote: () => {
     _socket?.emit('game:skip_vote');
   },
-  revealMayor: () => {
-    _socket?.emit('game:mayor_reveal');
-  },
-  sendGoodBoyPick: (targetId) => {
-    _socket?.emit('game:goodboy_pick', { targetId });
-  },
+
   setRoom: (room) => set({ room }),
-  clearRoom: () => set({ room: null, myCard: null, mafiaTeam: null, investigationResult: null, goodBoyMode: false, validTargets: [] }),
+  clearRoom: () => set({ room: null, myCard: null, mafiaTeam: null, investigationResult: null, validTargets: [], currentTurn: null, investigationHistory: [] }),
 }));

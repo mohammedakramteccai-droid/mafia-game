@@ -26,6 +26,13 @@ const io = new Server(server, {
 const rooms = {};   // roomId -> room object
 const players = {}; // socketId -> player info
 
+const NIGHT_STAGE_ORDER = ['mafia', 'doctor', 'detective'];
+const NIGHT_STAGE_CONFIG = {
+  mafia: { action: 'selectVictim', actionType: 'mafia' },
+  doctor: { action: 'protectPlayer', actionType: 'doctor' },
+  detective: { action: 'detectPlayer', actionType: 'detective' },
+};
+
 // ── helpers ────────────────────────────────────────────────
 function getRoomByCode(code) {
   return Object.values(rooms).find(r => r.roomCode === code);
@@ -45,7 +52,6 @@ function sanitizeRoom(room) {
     hostType: room.hostType,
     maxPlayers: room.maxPlayers,
     mafiaCount: room.mafiaCount,
-    enabledCards: room.enabledCards,
     status: room.status,
     language: room.language,
     discussionTime: room.discussionTime,
@@ -54,11 +60,12 @@ function sanitizeRoom(room) {
       username: p.username,
       isAlive: p.isAlive,
       isHost: p.isHost,
-      isMuted: p.isMuted || false,
-      mayorRevealed: p.mayorRevealed || false,
+      isReady: Boolean(room.readyPlayers?.[p.id]),
       avatar: p.avatar,
     })),
     phase: room.phase,
+    nightStage: room.nightStage || null,
+    readyCount: room.readyPlayers ? Object.keys(room.readyPlayers).length : 0,
     round: room.round,
   };
 }
@@ -85,7 +92,7 @@ io.on('connection', (socket) => {
       hostType: data.hostType || 'bot',
       maxPlayers: data.maxPlayers || 8,
       mafiaCount: data.mafiaCount || 2,
-      enabledCards: data.enabledCards || { vigilante:false, silencer:false, mayor:false, goodBoy:false },
+      enabledCards: {},
       language: data.language || 'ar',
       discussionTime: data.discussionTime || 180,
       status: 'waiting',
@@ -93,11 +100,15 @@ io.on('connection', (socket) => {
       round: 0,
       players: [],
       nightActions: {},
+      readyPlayers: {},
+      nightStage: null,
+      nightStageIndex: -1,
       votes: {},
       voteRound: 0,
       log: [],
       tiedPlayers: [],
-      silencedPlayer: null,
+      detectiveInvestigated: [],
+      doctorLastProtected: null,
     };
 
     const player = {
@@ -175,47 +186,115 @@ io.on('connection', (socket) => {
     if (!host?.isHost) return cb && cb({ success: false, error: 'not_host' });
     if (room.players.length < 4) return cb && cb({ success: false, error: 'not_enough_players' });
 
-    // Assign cards
     const cardMap = assignCards(room.players, room);
-    room.players.forEach(p => { p.card = cardMap[p.id]; p.isAlive = true; });
-    room.status = 'playing';
-    room.phase = 'night';
-    room.round = 1;
-    room.nightActions = {};
-    room.silencedPlayer = null;
-    room.log = [];
-
-    // إرسال البطاقة الخاصة لكل لاعب + الأهداف الصالحة
     room.players.forEach(p => {
-      // فريق المافيا = المافيا العادية + القاتل الصامت
+      p.card = cardMap[p.id];
+      p.isAlive = true;
+    });
+    room.status = 'playing';
+    room.phase = 'card_reveal';
+    room.round = 0;
+    room.nightActions = {};
+    room.readyPlayers = {};
+    room.expectedNightActions = {};
+    room.log = [];
+    room.detectiveInvestigated = [];
+    room.doctorLastProtected = null;
+
+    room.players.forEach(p => {
       const mafiaTeam = room.players
         .filter(m => CARDS[m.card]?.team === 'mafia')
         .map(m => ({ id: m.id, username: m.username, card: m.card }));
-      const validTargets = getValidTargets(p, room.players).map(t => ({ id: t.id, username: t.username, avatar: t.avatar }));
       const isMafiaTeam = CARDS[p.card]?.team === 'mafia';
       emitToPlayer(p.socketId, 'game:card_assigned', {
         card: p.card,
         cardInfo: CARDS[p.card],
-        mafiaTeam: isMafiaTeam ? mafiaTeam : null, // القاتل الصامت يرى فريق المافيا كاملاً
-        validTargets,
+        mafiaTeam: isMafiaTeam ? mafiaTeam : null,
+        validTargets: [],
       });
     });
 
-    // إرسال yourTurn لكل لاعب بدوره (from mafia_game_dev_plan.md)
-    // القاتل الصامت يأخذ دورَين: selectVictim (مع المافيا) + mutePlayer (مستقل)
-    room.players.filter(p => p.isAlive).forEach(p => {
-      const targets = getValidTargets(p, room.players).map(t => ({ id: t.id, username: t.username, avatar: t.avatar }));
-      const roleActions = { mafia: 'selectVictim', detective: 'detectPlayer', doctor: 'protectPlayer', vigilante: 'killPlayer', silencer: 'selectVictim' };
-      const action = roleActions[p.card];
-      if (action) {
-        emitToPlayer(p.socketId, 'game:your_turn', { action, targets, round: room.round });
-      }
-    });
-
     broadcastRoom(room);
-    io.to(room.roomId).emit('game:started', { phase: 'night', round: 1 });
+    io.to(room.roomId).emit('game:started', { phase: 'card_reveal', round: 0 });
     if (cb) cb({ success: true });
   });
+
+  socket.on('game:player_ready', () => {
+    const info = players[socket.id];
+    if (!info) return;
+    const room = rooms[info.roomId];
+    if (!room || room.phase !== 'card_reveal') return;
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player) return;
+
+    room.readyPlayers[player.id] = true;
+    broadcastRoom(room);
+    io.to(room.roomId).emit('game:ready_update', {
+      readyCount: Object.keys(room.readyPlayers).length,
+      total: room.players.length,
+    });
+
+    if (room.players.every(p => room.readyPlayers[p.id])) {
+      startNightPhase(room);
+    }
+  });
+
+  function publicTarget(p) {
+    return { id: p.id, username: p.username, avatar: p.avatar };
+  }
+
+  function getNightActors(room, stage) {
+    const alive = room.players.filter(p => p.isAlive);
+    if (stage === 'mafia') return alive.filter(p => p.card === 'mafia');
+    if (stage === 'doctor') return alive.filter(p => p.card === 'doctor');
+    if (stage === 'detective') return alive.filter(p => p.card === 'detective');
+    return [];
+  }
+
+  function getNightTargets(room, player, stage) {
+    const alive = room.players.filter(p => p.isAlive);
+    if (stage === 'mafia') {
+      return alive.filter(p => CARDS[p.card]?.team !== 'mafia');
+    }
+    if (stage === 'detective') {
+      // المختار لا يمكنه التحقق من نفس الشخص مرتين
+      const investigated = room.detectiveInvestigated || [];
+      return alive.filter(p => p.id !== player.id && !investigated.includes(p.id));
+    }
+    if (stage === 'doctor') {
+      // الطبيب لا يمكنه حماية نفس الشخص في ليلتين متتاليتين
+      const lastProtected = room.doctorLastProtected;
+      return alive.filter(p => p.id !== lastProtected);
+    }
+    return getValidTargets(player, room.players);
+  }
+
+  function emitNightTurn(room, player, stage) {
+    const config = NIGHT_STAGE_CONFIG[stage];
+    const targets = getNightTargets(room, player, stage).map(publicTarget);
+    emitToPlayer(player.socketId, 'game:your_turn', {
+      action: config.action,
+      actionType: config.actionType,
+      stage,
+      targets,
+      round: room.round,
+    });
+  }
+
+  function canUseNightAction(room, player, actionType) {
+    const expected = room.expectedNightActions[player.id];
+    return expected && expected.includes(actionType);
+  }
+
+  function handleDetectiveResult(room, detective, targetId) {
+    const target = room.players.find(p => p.id === targetId);
+    if (!target) return;
+    emitToPlayer(detective.socketId, 'game:investigation_result', {
+      targetId,
+      targetUsername: target.username,
+      result: CARDS[target.card]?.team === 'mafia' ? 'mafia' : 'citizen',
+    });
+  }
 
   // ── Night action ─────────────────────────────────────────
   socket.on('game:night_action', (data) => {
@@ -228,11 +307,22 @@ io.on('connection', (socket) => {
 
     const { actionType, targetId } = data;
 
-    // ── Anti-cheat: validateTarget (from mafia_game_dev_plan.md) ──
-    const validTargets = getValidTargets(player, room.players);
-    const validIds = validTargets.map(p => p.id);
-    if (targetId && !validIds.includes(targetId)) {
+    if (!canUseNightAction(room, player, actionType)) {
+      return emitToPlayer(socket.id, 'game:error', { message: 'Not your turn', code: 'NOT_YOUR_TURN' });
+    }
+    if (!targetId) {
       return emitToPlayer(socket.id, 'game:error', { message: 'Invalid target', code: 'INVALID_TARGET' });
+    }
+
+    // ── Anti-cheat: validateTarget ──
+    // Find the stage for this actionType
+    const stage = Object.keys(NIGHT_STAGE_CONFIG).find(k => NIGHT_STAGE_CONFIG[k].actionType === actionType);
+    if (stage) {
+      const validTargets = getNightTargets(room, player, stage);
+      const validIds = validTargets.map(p => p.id);
+      if (targetId && !validIds.includes(targetId)) {
+        return emitToPlayer(socket.id, 'game:error', { message: 'Invalid target', code: 'INVALID_TARGET' });
+      }
     }
 
     // actionType: 'mafia', 'doctor', 'detective', 'vigilante', 'silencer'
@@ -240,49 +330,40 @@ io.on('connection', (socket) => {
     room.nightActions[actionType][socket.id] = targetId;
 
     emitToPlayer(socket.id, 'game:action_registered', { actionType });
-    resolveNightIfReady(room);
+
+    // Mark action as completed
+    room.expectedNightActions[player.id] = room.expectedNightActions[player.id].filter(a => a !== actionType);
+    if (room.expectedNightActions[player.id].length === 0) {
+      delete room.expectedNightActions[player.id];
+    }
+
+    if (actionType === 'detective') {
+      handleDetectiveResult(room, player, targetId);
+    }
+
+    // Check if everyone has submitted their expected actions
+    if (Object.keys(room.expectedNightActions).length === 0) {
+      // For mafia, we check if consensus is met. If not, we just set mafiaTarget to null.
+      const mafiaVotes = Object.values(room.nightActions.mafia || {});
+      if (mafiaVotes.length > 0) {
+        const uniqueTargets = new Set(mafiaVotes);
+        if (uniqueTargets.size > 1) {
+          // Mafia failed to agree, no one dies.
+          room.nightActions.mafia = {};
+        }
+      }
+      resolveNight(room);
+    }
   });
 
-  function resolveNightIfReady(room) {
-    const alive = room.players.filter(p => p.isAlive);
-    // فريق القتلة = المافيا العادية + القاتل الصامت (كلاهما يصوتان على الضحية)
-    const killersAlive = alive.filter(p => CARDS[p.card]?.team === 'mafia');
-    const doctorAlive = alive.find(p => p.card === 'doctor');
-    const detectiveAlive = alive.find(p => p.card === 'detective');
-    const vigilanteAlive = room.enabledCards?.vigilante ? alive.find(p => p.card === 'vigilante') : null;
-    const silencerAlive = room.enabledCards?.silencer ? alive.find(p => p.card === 'silencer') : null;
-
+  function resolveNight(room) {
     const na = room.nightActions;
+    const mafiaTarget = Object.values(na.mafia || {})[0] || null;
+    const doctorTarget = Object.values(na.doctor || {})[0] || null;
+    const detectiveTarget = Object.values(na.detective || {})[0] || null;
 
-    // انتظار تصويت كل القتلة (مافيا + قاتل صامت) على الضحية
-    const mafiaVotes = na.mafia || {};
-    const mafiaVotedCount = Object.keys(mafiaVotes).length;
-    if (killersAlive.length > 0 && mafiaVotedCount < killersAlive.length) return;
-
-    // Find mafia consensus target
-    const mafiaVoteCounts = {};
-    Object.values(mafiaVotes).forEach(t => { mafiaVoteCounts[t] = (mafiaVoteCounts[t]||0)+1; });
-    const mafiaTarget = Object.entries(mafiaVoteCounts).sort((a,b)=>b[1]-a[1])[0]?.[0];
-
-    // Doctor
-    const doctorTarget = doctorAlive ? (na.doctor?.[doctorAlive.id] || null) : null;
-    if (doctorAlive && !doctorTarget) return;
-
-    // Detective
-    const detectiveTarget = detectiveAlive ? (na.detective?.[detectiveAlive.id] || null) : null;
-    if (detectiveAlive && !detectiveTarget) return;
-
-    // Vigilante (optional)
-    const vigilanteTarget = vigilanteAlive ? (na.vigilante?.[vigilanteAlive.id] || null) : null;
-    if (vigilanteAlive && !vigilanteTarget) return;
-
-    // Silencer (optional)
-    const silencerTarget = silencerAlive ? (na.silencer?.[silencerAlive.id] || null) : null;
-    if (silencerAlive && !silencerTarget) return;
-
-    // All actions collected - process
     const result = processNightActions(
-      { mafiaTarget, doctorTarget, detectiveTarget, vigilanteTarget, silencerTarget },
+      { mafiaTarget, doctorTarget, detectiveTarget },
       room.players, room
     );
 
@@ -294,37 +375,28 @@ io.on('connection', (socket) => {
         room.log.push({ round: room.round, type: 'night_kill', playerId: victim.id, username: victim.username });
       }
     }
-    if (result.vigilanteKilled) {
-      const victim = room.players.find(p => p.id === result.vigilanteKilled);
-      if (victim && victim.isAlive) {
-        victim.isAlive = false;
-        room.log.push({ round: room.round, type: 'vigilante_kill', playerId: victim.id, username: victim.username });
+
+    // تحديث سجل التحقيقات للمختار
+    if (detectiveTarget) {
+      if (!room.detectiveInvestigated) room.detectiveInvestigated = [];
+      if (!room.detectiveInvestigated.includes(detectiveTarget)) {
+        room.detectiveInvestigated.push(detectiveTarget);
       }
     }
-    if (result.vigilanteDied) {
-      const vig = alive.find(p => p.card === 'vigilante');
-      if (vig) { vig.isAlive = false; room.log.push({ round: room.round, type: 'vigilante_selfdestruct', playerId: vig.id, username: vig.username }); }
-    }
-    if (result.silenced) {
-      room.silencedPlayer = result.silenced;
-    }
 
-    // Send detective result privately
-    if (detectiveAlive && result.investigated) {
-      emitToPlayer(detectiveAlive.socketId, 'game:investigation_result', {
-        targetId: result.investigated,
-        result: result.investigationResult,
-      });
-    }
+    // تحديث آخر شخص حماه الطبيب
+    room.doctorLastProtected = doctorTarget || null;
 
     // Move to day
     room.phase = 'day';
     room.nightActions = {};
+    room.expectedNightActions = {};
 
     const winCheck = checkWinCondition(room.players);
     if (winCheck) return endGame(room, winCheck);
 
-    const deaths = room.log.filter(l => l.round === room.round && ['night_kill','vigilante_kill','vigilante_selfdestruct'].includes(l.type));
+    const deaths = room.log.filter(l => l.round === room.round && l.type === 'night_kill');
+
     // تحديث الأهداف الصالحة لكل لاعب بعد الليل
     room.players.filter(p => p.isAlive).forEach(p => {
       const validTargets = getValidTargets(p, room.players).map(t => ({ id: t.id, username: t.username, avatar: t.avatar }));
@@ -334,7 +406,7 @@ io.on('connection', (socket) => {
     io.to(room.roomId).emit('game:day_start', {
       round: room.round,
       deaths,
-      silencedPlayer: room.silencedPlayer,
+      wasSaved: result.saved || false,
     });
   }
 
@@ -391,40 +463,13 @@ io.on('connection', (socket) => {
       voteCounts: result.voteCounts,
     });
 
-    // Good Boy check
-    if (eliminated?.card === 'goodBoy') {
-      room.phase = 'goodboy';
-      room.goodBoyPlayerId = result.eliminated;
-      broadcastRoom(room);
-      io.to(room.roomId).emit('game:goodboy_choice', { playerId: result.eliminated, username: eliminated.username });
-      emitToPlayer(eliminated.socketId, 'game:goodboy_pick', {});
-      return;
-    }
-
     const winCheck = checkWinCondition(room.players);
     if (winCheck) return endGame(room, winCheck);
 
     startNightPhase(room);
   }
 
-  // Good Boy picks someone to drag out
-  socket.on('game:goodboy_pick', (data) => {
-    const info = players[socket.id];
-    if (!info) return;
-    const room = rooms[info.roomId];
-    if (!room || room.phase !== 'goodboy') return;
-    const { targetId } = data;
-    const target = room.players.find(p => p.id === targetId);
-    if (target) {
-      target.isAlive = false;
-      io.to(room.roomId).emit('game:goodboy_result', {
-        targetId, targetUsername: target.username, targetCard: target.card
-      });
-    }
-    const winCheck = checkWinCondition(room.players);
-    if (winCheck) return endGame(room, winCheck);
-    startNightPhase(room);
-  });
+
 
   // Start voting phase (host or bot triggers)
   socket.on('game:start_voting', () => {
@@ -432,6 +477,8 @@ io.on('connection', (socket) => {
     if (!info) return;
     const room = rooms[info.roomId];
     if (!room || room.phase !== 'day') return;
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player || !player.isAlive) return;
     room.phase = 'voting';
     room.votes = {};
     room.tiedPlayers = [];
@@ -447,43 +494,43 @@ io.on('connection', (socket) => {
     if (!info) return;
     const room = rooms[info.roomId];
     if (!room || room.phase !== 'voting') return;
-    io.to(room.roomId).emit('game:vote_skipped', {});
-    startNightPhase(room);
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player || !player.isAlive) return;
+
+    room.votes[socket.id] = null;
+    const alive = room.players.filter(p => p.isAlive);
+    const voted = alive.filter(p => room.votes.hasOwnProperty(p.id)).length;
+    io.to(room.roomId).emit('game:vote_update', { voted, total: alive.length });
+
+    if (voted >= alive.length) resolveVote(room);
   });
 
-  // Mayor reveal
-  socket.on('game:mayor_reveal', () => {
-    const info = players[socket.id];
-    if (!info) return;
-    const room = rooms[info.roomId];
-    if (!room) return;
-    const player = room.players.find(p => p.id === socket.id);
-    if (!player || player.card !== 'mayor') return;
-    player.mayorRevealed = true;
-    broadcastRoom(room);
-    io.to(room.roomId).emit('game:mayor_revealed', { playerId: socket.id, username: player.username });
-  });
+
 
   function startNightPhase(room) {
     room.round++;
     room.phase = 'night';
     room.nightActions = {};
+    room.expectedNightActions = {};
     room.votes = {};
-    room.silencedPlayer = null;
-
-    // yourTurn لكل لاعب له دور ليلي (from mafia_game_dev_plan.md)
-    // القاتل الصامت: selectVictim (يصوت مع المافيا على الضحية) + mutePlayer (إسكات مستقل)
-    room.players.filter(p => p.isAlive).forEach(p => {
-      const targets = getValidTargets(p, room.players).map(t => ({ id: t.id, username: t.username, avatar: t.avatar }));
-      const roleActions = { mafia: 'selectVictim', detective: 'detectPlayer', doctor: 'protectPlayer', vigilante: 'killPlayer', silencer: 'selectVictim' };
-      const action = roleActions[p.card];
-      if (action) {
-        emitToPlayer(p.socketId, 'game:your_turn', { action, targets, round: room.round });
-      }
-    });
 
     broadcastRoom(room);
     io.to(room.roomId).emit('game:night_start', { round: room.round });
+
+    let hasActions = false;
+    NIGHT_STAGE_ORDER.forEach(stage => {
+      const actors = getNightActors(room, stage);
+      actors.forEach(p => {
+        hasActions = true;
+        if (!room.expectedNightActions[p.id]) room.expectedNightActions[p.id] = [];
+        room.expectedNightActions[p.id].push(NIGHT_STAGE_CONFIG[stage].actionType);
+        emitNightTurn(room, p, stage);
+      });
+    });
+
+    if (!hasActions) {
+      resolveNight(room);
+    }
   }
 
   function endGame(room, winResult) {
