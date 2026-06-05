@@ -20,17 +20,38 @@ const scaleIn = {
 };
 
 export default function HomeScreen({ onNavigate }) {
-  const { username, avatar, language, setUsername, setAvatar, setLanguage, connect, connected } = useGameStore();
+  const { username, avatar, language, setUsername, setAvatar, setLanguage, connect, connected, randomJoin, setRoom, showNotification } = useGameStore();
   const t = useT(language);
   const [name, setName] = useState(username);
   const [selectedAvatar, setSelectedAvatar] = useState(avatar || '🎭');
   const [showAvatars, setShowAvatars] = useState(false);
+  const [findingRandom, setFindingRandom] = useState(false);
 
-  const handlePlay = (mode) => {
+  const handlePlay = async (mode) => {
     if (!name.trim()) return;
-    setUsername(name.trim());
+    const cleanName = name.trim();
+    setUsername(cleanName);
     setAvatar(selectedAvatar);
     if (!connected) connect();
+
+    if (mode === 'random') {
+      setFindingRandom(true);
+      try {
+        const res = await randomJoin({ username: cleanName, avatar: selectedAvatar });
+        if (res?.success) {
+          setRoom(res.room);
+          onNavigate('lobby');
+        } else {
+          showNotification(res?.error === 'no_rooms' ? t('noRooms') : t('error'), 'warning');
+        }
+      } catch {
+        showNotification(t('error'), 'error');
+      } finally {
+        setFindingRandom(false);
+      }
+      return;
+    }
+
     onNavigate(mode);
   };
 
@@ -176,6 +197,7 @@ export default function HomeScreen({ onNavigate }) {
                 key={item.mode}
                 className={`btn ${item.cls} btn-lg btn-full choice-card`}
                 onClick={() => handlePlay(item.mode)}
+                disabled={findingRandom}
                 variants={fadeUp}
                 whileHover={{ scale: 1.02, y: -3 }}
                 whileTap={{ scale: 0.98 }}
@@ -188,7 +210,7 @@ export default function HomeScreen({ onNavigate }) {
                 >
                   {item.icon}
                 </motion.span>
-                <span>{item.label}</span>
+                <span>{item.mode === 'random' && findingRandom ? t('loading') : item.label}</span>
               </motion.button>
             ))}
           </motion.div>

@@ -1,7 +1,7 @@
 import { useGameStore } from '../store';
 import { useT, CARD_INFO } from '../utils';
 import { motion } from 'framer-motion';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 function Confetti() {
   const [particles] = useState(() =>
@@ -12,6 +12,8 @@ function Confetti() {
       size: Math.random() * 6 + 4,
       delay: Math.random() * 2,
       duration: Math.random() * 2 + 2,
+      borderRadius: Math.random() > 0.5 ? '50%' : '2px',
+      rotate: Math.random() * 720 - 360,
     }))
   );
 
@@ -26,10 +28,10 @@ function Confetti() {
             width: p.size,
             height: p.size * 1.5,
             backgroundColor: p.color,
-            borderRadius: Math.random() > 0.5 ? '50%' : '2px',
+            borderRadius: p.borderRadius,
           }}
           initial={{ y: -20, opacity: 1, rotate: 0 }}
-          animate={{ y: '100vh', opacity: 0, rotate: Math.random() * 720 - 360 }}
+          animate={{ y: '100vh', opacity: 0, rotate: p.rotate }}
           transition={{ duration: p.duration, delay: p.delay, ease: 'easeIn', repeat: Infinity, repeatDelay: p.delay }}
         />
       ))}
@@ -38,15 +40,23 @@ function Confetti() {
 }
 
 export default function ResultsScreen({ result, onNavigate }) {
-  const { language, clearRoom } = useGameStore();
+  const { language, clearRoom, room, playerId, returnToLobby } = useGameStore();
   const t = useT(language);
   const dir = language === 'ar' ? 'rtl' : 'ltr';
+
+  // Return to lobby automatically if the host triggered it
+  useEffect(() => {
+    if (room?.phase === 'lobby') {
+      onNavigate('lobby');
+    }
+  }, [room?.phase, onNavigate]);
 
   if (!result) return null;
 
   const isMafiaWin = result.winner === 'mafia';
+  const isHost = room?.players?.find(p => p.id === playerId)?.isHost;
 
-  const handlePlayAgain = () => {
+  const handleLeaveRoom = () => {
     clearRoom();
     onNavigate('home');
   };
@@ -132,17 +142,23 @@ export default function ResultsScreen({ result, onNavigate }) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.7 }}
       >
-        <motion.button
-          className="btn btn-primary btn-lg btn-full"
-          onClick={handlePlayAgain}
-          whileHover={{ scale: 1.02, boxShadow: '0 16px 48px rgba(239, 57, 72, 0.35)' }}
-          whileTap={{ scale: 0.98 }}
-        >
-          🔄 {t('playAgain')}
-        </motion.button>
+        {isHost ? (
+          <motion.button
+            className="btn btn-primary btn-lg btn-full"
+            onClick={returnToLobby}
+            whileHover={{ scale: 1.02, boxShadow: '0 16px 48px rgba(239, 57, 72, 0.35)' }}
+            whileTap={{ scale: 0.98 }}
+          >
+            🔄 {language === 'ar' ? 'العودة للوبي (نفس الغرفة)' : 'Return to Lobby'}
+          </motion.button>
+        ) : (
+          <p className="text-center text-muted mb-2 text-sm">
+            {language === 'ar' ? 'في انتظار المضيف لإعادة اللعب...' : 'Waiting for host to play again...'}
+          </p>
+        )}
         <motion.button
           className="btn btn-ghost btn-full"
-          onClick={handlePlayAgain}
+          onClick={handleLeaveRoom}
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
         >

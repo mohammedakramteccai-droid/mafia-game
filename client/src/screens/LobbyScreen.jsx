@@ -16,7 +16,7 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
   const [copied, setCopied] = useState(false);
   const [starting, setStarting] = useState(false);
 
-  const me = room?.players.find(p => p.username === username);
+  const me = room?.players.find(p => p.id === socket?.id) || room?.players.find(p => p.username === username);
   const isHost = me?.isHost;
   const minPlayers = 4;
   const canStart = room?.players.length >= minPlayers;
@@ -220,7 +220,7 @@ export default function LobbyScreen({ onNavigate, onGameStarted }) {
                   </motion.span>
                   <span className="player-name">{p.username}</span>
                   {p.isHost && <span className="player-badge badge-host">👑 {t('host')}</span>}
-                  {p.username === username && !p.isHost && <span className="player-badge badge-you">{t('you')}</span>}
+                  {(p.id === socket?.id || (!socket?.id && p.username === username)) && !p.isHost && <span className="player-badge badge-you">{t('you')}</span>}
                 </motion.div>
               ))}
             </AnimatePresence>

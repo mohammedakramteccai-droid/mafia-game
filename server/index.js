@@ -43,6 +43,23 @@ function getPublicRooms() {
        && r.players.length < r.maxPlayers
   );
 }
+function clampInteger(value, min, max, fallback) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+function normalizeRoomSettings(data = {}) {
+  const maxPlayers = clampInteger(data.maxPlayers, 4, 15, 8);
+  const mafiaLimit = Math.max(1, Math.floor(maxPlayers / 3));
+  return {
+    maxPlayers,
+    mafiaCount: clampInteger(data.mafiaCount, 1, mafiaLimit, Math.min(2, mafiaLimit)),
+    discussionTime: clampInteger(data.discussionTime, 60, 600, 180),
+  };
+}
+function reply(cb, payload) {
+  if (typeof cb === 'function') cb(payload);
+}
 function sanitizeRoom(room) {
   return {
     roomId: room.roomId,
@@ -52,6 +69,7 @@ function sanitizeRoom(room) {
     hostType: room.hostType,
     maxPlayers: room.maxPlayers,
     mafiaCount: room.mafiaCount,
+    enabledCards: room.enabledCards || {},
     status: room.status,
     language: room.language,
     discussionTime: room.discussionTime,
@@ -61,6 +79,8 @@ function sanitizeRoom(room) {
       isAlive: p.isAlive,
       isHost: p.isHost,
       isReady: Boolean(room.readyPlayers?.[p.id]),
+      isMuted: p.isMuted || false,
+      mayorRevealed: p.mayorRevealed || false,
       avatar: p.avatar,
     })),
     phase: room.phase,
@@ -82,6 +102,7 @@ io.on('connection', (socket) => {
 
   // Create room
   socket.on('room:create', (data, cb) => {
+    const settings = normalizeRoomSettings(data);
     const roomId = generateRoomId();
     const roomCode = generateRoomCode();
     const room = {
@@ -90,11 +111,11 @@ io.on('connection', (socket) => {
       roomName: data.roomName || 'Mafia Room',
       accessType: data.accessType || 'public',
       hostType: data.hostType || 'bot',
-      maxPlayers: data.maxPlayers || 8,
-      mafiaCount: data.mafiaCount || 2,
-      enabledCards: {},
+      maxPlayers: settings.maxPlayers,
+      mafiaCount: settings.mafiaCount,
+      enabledCards: data.enabledCards || {},
       language: data.language || 'ar',
-      discussionTime: data.discussionTime || 180,
+      discussionTime: settings.discussionTime,
       status: 'waiting',
       phase: 'lobby',
       round: 0,
@@ -129,17 +150,16 @@ io.on('connection', (socket) => {
 
     socket.join(roomId);
     broadcastRoom(room); // يُرسل room:update للمنشئ
-    cb({ success: true, roomId, roomCode, room: sanitizeRoom(room) });
+    reply(cb, { success: true, roomId, roomCode, room: sanitizeRoom(room) });
   });
 
-  // Join room by code
-  socket.on('room:join', (data, cb) => {
+  function joinExistingRoom(data, cb) {
     const { roomCode, username, avatar } = data;
     let room = data.roomId ? rooms[data.roomId] : getRoomByCode(roomCode);
 
-    if (!room) return cb({ success: false, error: 'room_not_found' });
-    if (room.status !== 'waiting') return cb({ success: false, error: 'game_started' });
-    if (room.players.length >= room.maxPlayers) return cb({ success: false, error: 'room_full' });
+    if (!room) return reply(cb, { success: false, error: 'room_not_found' });
+    if (room.status !== 'waiting') return reply(cb, { success: false, error: 'game_started' });
+    if (room.players.length >= room.maxPlayers) return reply(cb, { success: false, error: 'room_full' });
 
     const player = {
       id: socket.id, socketId: socket.id,
@@ -155,8 +175,11 @@ io.on('connection', (socket) => {
 
     broadcastRoom(room);
     io.to(room.roomId).emit('room:player_joined', { username: player.username });
-    cb({ success: true, roomId: room.roomId, room: sanitizeRoom(room) });
-  });
+    return reply(cb, { success: true, roomId: room.roomId, roomCode: room.roomCode, room: sanitizeRoom(room) });
+  }
+
+  // Join room by code
+  socket.on('room:join', joinExistingRoom);
 
   // Random join
   socket.on('room:random_join', (data, cb) => {
@@ -164,16 +187,14 @@ io.on('connection', (socket) => {
     const available = getPublicRooms().filter(r =>
       !playerCount || r.maxPlayers === playerCount
     );
-    if (!available.length) return cb({ success: false, error: 'no_rooms' });
+    if (!available.length) return reply(cb, { success: false, error: 'no_rooms' });
     const room = available[0];
-    socket.emit('room:join', { roomId: room.roomId, username, avatar }, cb);
-    // Delegate to join handler
-    socket.emit('_internal_join', { roomId: room.roomId, username, avatar }, cb);
+    return joinExistingRoom({ roomId: room.roomId, username, avatar }, cb);
   });
 
   // Get public rooms list
   socket.on('rooms:list', (data, cb) => {
-    cb({ rooms: getPublicRooms().map(sanitizeRoom) });
+    reply(cb, { rooms: getPublicRooms().map(sanitizeRoom) });
   });
 
   // ── Start game ──────────────────────────────────────────
@@ -185,6 +206,9 @@ io.on('connection', (socket) => {
     const host = room.players.find(p => p.id === socket.id);
     if (!host?.isHost) return cb && cb({ success: false, error: 'not_host' });
     if (room.players.length < 4) return cb && cb({ success: false, error: 'not_enough_players' });
+
+    const mafiaLimit = Math.max(1, Math.floor(room.players.length / 3));
+    room.mafiaCount = clampInteger(room.mafiaCount, 1, mafiaLimit, Math.min(2, mafiaLimit));
 
     const cardMap = assignCards(room.players, room);
     room.players.forEach(p => {
@@ -272,6 +296,7 @@ io.on('connection', (socket) => {
   function emitNightTurn(room, player, stage) {
     const config = NIGHT_STAGE_CONFIG[stage];
     const targets = getNightTargets(room, player, stage).map(publicTarget);
+    if (!targets.length) return false;
     emitToPlayer(player.socketId, 'game:your_turn', {
       action: config.action,
       actionType: config.actionType,
@@ -279,6 +304,7 @@ io.on('connection', (socket) => {
       targets,
       round: room.round,
     });
+    return true;
   }
 
   function canUseNightAction(room, player, actionType) {
@@ -349,6 +375,9 @@ io.on('connection', (socket) => {
         const uniqueTargets = new Set(mafiaVotes);
         if (uniqueTargets.size > 1) {
           // Mafia failed to agree, no one dies.
+          getNightActors(room, 'mafia').forEach(p => {
+            emitToPlayer(p.socketId, 'game:mafia_consensus_failed', {});
+          });
           room.nightActions.mafia = {};
         }
       }
@@ -436,12 +465,15 @@ io.on('connection', (socket) => {
       room.tiedPlayers = result.tiedPlayers;
       room.votes = {};
       room.voteRound++;
+      broadcastRoom(room);
+      io.to(room.roomId).emit('game:vote_update', { voted: 0, total: alive.length });
       io.to(room.roomId).emit('game:vote_tie', {
         tiedPlayers: result.tiedPlayers.map(id => {
           const p = room.players.find(x => x.id === id);
           return { id, username: p?.username };
         }),
         voteCounts: result.voteCounts,
+        total: alive.length,
       });
       return;
     }
@@ -521,10 +553,11 @@ io.on('connection', (socket) => {
     NIGHT_STAGE_ORDER.forEach(stage => {
       const actors = getNightActors(room, stage);
       actors.forEach(p => {
-        hasActions = true;
-        if (!room.expectedNightActions[p.id]) room.expectedNightActions[p.id] = [];
-        room.expectedNightActions[p.id].push(NIGHT_STAGE_CONFIG[stage].actionType);
-        emitNightTurn(room, p, stage);
+        if (emitNightTurn(room, p, stage)) {
+          hasActions = true;
+          if (!room.expectedNightActions[p.id]) room.expectedNightActions[p.id] = [];
+          room.expectedNightActions[p.id].push(NIGHT_STAGE_CONFIG[stage].actionType);
+        }
       });
     });
 
@@ -550,14 +583,49 @@ io.on('connection', (socket) => {
     if (!info) return;
     const room = rooms[info.roomId];
     if (room) {
+      const leavingPlayer = room.players.find(p => p.id === socket.id);
       room.players = room.players.filter(p => p.id !== socket.id);
       if (room.players.length === 0) {
         delete rooms[info.roomId];
       } else {
+        if (room.readyPlayers) delete room.readyPlayers[socket.id];
+        if (room.expectedNightActions) delete room.expectedNightActions[socket.id];
+        if (room.votes) delete room.votes[socket.id];
+        Object.values(room.nightActions || {}).forEach(actionMap => {
+          if (actionMap && typeof actionMap === 'object') delete actionMap[socket.id];
+        });
+
         if (!room.players.find(p => p.isHost) && room.players.length > 0) {
           room.players[0].isHost = true;
         }
-        broadcastRoom(room);
+
+        let stateSettled = false;
+        if (room.status === 'playing' && leavingPlayer?.isAlive) {
+          const winCheck = checkWinCondition(room.players);
+          if (winCheck) {
+            endGame(room, winCheck);
+            stateSettled = true;
+          }
+        }
+        if (!stateSettled && room.phase === 'card_reveal' && room.players.every(p => room.readyPlayers?.[p.id])) {
+          startNightPhase(room);
+          stateSettled = true;
+        }
+        if (!stateSettled && room.phase === 'night' && room.expectedNightActions && Object.keys(room.expectedNightActions).length === 0) {
+          resolveNight(room);
+          stateSettled = true;
+        }
+        if (!stateSettled && room.phase === 'voting') {
+          const alive = room.players.filter(p => p.isAlive);
+          const voted = alive.filter(p => room.votes?.hasOwnProperty(p.id)).length;
+          io.to(room.roomId).emit('game:vote_update', { voted, total: alive.length });
+          if (alive.length > 0 && voted >= alive.length) {
+            resolveVote(room);
+            stateSettled = true;
+          }
+        }
+
+        if (!stateSettled) broadcastRoom(room);
         io.to(room.roomId).emit('room:player_left', { socketId: socket.id });
       }
     }
@@ -568,6 +636,10 @@ io.on('connection', (socket) => {
 // REST: get public rooms
 app.get('/api/rooms', (req, res) => {
   res.json({ rooms: getPublicRooms().map(sanitizeRoom) });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, rooms: Object.keys(rooms).length });
 });
 
 // SPA catch-all: serve client for any non-API route

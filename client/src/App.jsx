@@ -15,19 +15,24 @@ const pageVariants = {
   exit: { opacity: 0, scale: 1.02, filter: 'blur(4px)', transition: { duration: 0.3, ease: 'easeIn' } },
 };
 
-function FloatingParticles() {
-  const particles = Array.from({ length: 18 }, (_, i) => ({
-    id: i,
-    x: Math.random() * 100,
-    y: Math.random() * 100,
-    size: Math.random() * 3 + 1,
-    delay: Math.random() * 6,
-    duration: Math.random() * 8 + 10,
-  }));
+const seededValue = (index, salt) => {
+  const value = Math.sin(index * 12.9898 + salt * 78.233) * 43758.5453;
+  return value - Math.floor(value);
+};
 
+const floatingParticles = Array.from({ length: 18 }, (_, i) => ({
+  id: i,
+  x: seededValue(i, 1) * 100,
+  y: seededValue(i, 2) * 100,
+  size: seededValue(i, 3) * 3 + 1,
+  delay: seededValue(i, 4) * 6,
+  duration: seededValue(i, 5) * 8 + 10,
+}));
+
+function FloatingParticles() {
   return (
     <div className="floating-particles" aria-hidden="true">
-      {particles.map(p => (
+      {floatingParticles.map(p => (
         <motion.div
           key={p.id}
           className="particle"

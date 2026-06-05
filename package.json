@@ -5,6 +5,7 @@
   "scripts": {
     "install:all": "cd client && npm install --include=dev && cd ../server && npm install",
     "build": "cd client && npm run build",
+    "heroku-postbuild": "npm run install:all && npm run build",
     "start": "cd server && node index.js",
     "dev": "cd server && node --watch index.js"
   },

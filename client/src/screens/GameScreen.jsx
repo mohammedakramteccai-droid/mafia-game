@@ -1,17 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useGameStore } from '../store';
 import { useT, CARD_INFO } from '../utils';
 
 export default function GameScreen({ onGameOver }) {
-  const { room, myCard, mafiaTeam, validTargets, currentTurn, investigationResult, investigationHistory, username,
+  const { room, myCard, mafiaTeam, currentTurn, investigationHistory, username,
           actionSubmitted, language, socket, sendReady, sendNightAction, sendVote, startVoting, showNotification } = useGameStore();
   const t = useT(language);
   const dir = language === 'ar' ? 'rtl' : 'ltr';
 
-  const fallbackTargets = room?.players.filter(p => p.isAlive && p.username !== username) || [];
-  const nightTargets = currentTurn?.targets?.length ? currentTurn.targets : (validTargets.length > 0 ? validTargets : fallbackTargets);
-  const voteTargets = room?.players.filter(p => p.isAlive && p.username !== username) || [];
+  const me = room?.players.find(p => p.id === socket?.id) || room?.players.find(p => p.username === username);
+  const voteTargets = room?.players.filter(p => p.isAlive && p.id !== me?.id) || [];
   const aliveAll = room?.players.filter(p => p.isAlive) || [];
 
   const [selectedTarget, setSelectedTarget] = useState(null);
@@ -24,11 +23,9 @@ export default function GameScreen({ onGameOver }) {
   const [timer, setTimer] = useState(0);
   const timerRef = useRef(null);
 
-  const me = room?.players.find(p => p.username === username);
   const cardInfo = CARD_INFO[myCard] || {};
   const cardDesc = myCard ? t(cardInfo.descKey || myCard) : '';
   const isBotHost = room?.hostType === 'bot';
-  const isHost = me?.isHost;
   const phase = room?.phase;
   const discussionTime = room?.discussionTime || 180;
   const tiedIds = tieInfo?.tiedPlayers?.map(p => typeof p === 'string' ? p : p.id) || [];
@@ -48,45 +45,66 @@ export default function GameScreen({ onGameOver }) {
 
   useEffect(() => {
     if (!socket) return;
-    socket.on('game:day_start', (data) => {
+    const handleDayStart = (data) => {
       setDayInfo(data); setTimer(discussionTime); setActionSent(false);
       setSelectedTarget(null); setBotStep('announce'); setElimInfo(null); setTieInfo(null);
-    });
-    socket.on('game:night_start', () => {
+    };
+    const handleNightStart = () => {
       setActionSent(false); setSelectedTarget(null); setBotStep('sleep');
       setDayInfo(null); setElimInfo(null); setTieInfo(null);
-    });
-    socket.on('game:night_stage', () => {
+    };
+    const handleNightStage = () => {
       setActionSent(false); setSelectedTarget(null); setBotStep('sleep');
-    });
-    socket.on('game:mafia_consensus_failed', () => {
+    };
+    const handleMafiaConsensusFailed = () => {
       setActionSent(false); setSelectedTarget(null);
       showNotification(t('mafiaConsensusFailed'), 'warning', 4000);
-    });
-    socket.on('game:error', (data) => {
+    };
+    const handleGameError = (data) => {
       showNotification(data?.code === 'NOT_YOUR_TURN' ? t('notYourTurn') : (data?.message || t('error')), 'error');
-    });
-    socket.on('game:vote_update', setVoteCount);
-    socket.on('game:vote_tie', (data) => setTieInfo(data));
-    socket.on('game:player_eliminated', (data) => setElimInfo(data));
-    socket.on('game:vote_skipped', () => setElimInfo({ skipped: true }));
+    };
+    const handleVoteUpdate = (data) => setVoteCount(data);
+    const handleVotingStart = (data) => {
+      setActionSent(false);
+      setSelectedTarget(null);
+      setTieInfo(null);
+      setElimInfo(null);
+      setVoteCount({ voted: 0, total: data?.players?.length || aliveAll.length });
+    };
+    const handleVoteTie = (data) => {
+      setTieInfo(data);
+      setActionSent(false);
+      setSelectedTarget(null);
+      setVoteCount({ voted: 0, total: data?.total || aliveAll.length });
+    };
+    const handlePlayerEliminated = (data) => setElimInfo(data);
+    const handleVoteSkipped = () => setElimInfo({ skipped: true });
+
+    socket.on('game:day_start', handleDayStart);
+    socket.on('game:night_start', handleNightStart);
+    socket.on('game:night_stage', handleNightStage);
+    socket.on('game:mafia_consensus_failed', handleMafiaConsensusFailed);
+    socket.on('game:error', handleGameError);
+    socket.on('game:voting_start', handleVotingStart);
+    socket.on('game:vote_update', handleVoteUpdate);
+    socket.on('game:vote_tie', handleVoteTie);
+    socket.on('game:player_eliminated', handlePlayerEliminated);
+    socket.on('game:vote_skipped', handleVoteSkipped);
     socket.on('game:over', onGameOver);
     return () => {
-      socket.off('game:day_start'); socket.off('game:night_start');
-      socket.off('game:night_stage'); socket.off('game:mafia_consensus_failed'); socket.off('game:error');
-      socket.off('game:vote_update'); socket.off('game:vote_tie');
-      socket.off('game:player_eliminated'); socket.off('game:vote_skipped');
-      socket.off('game:over');
+      socket.off('game:day_start', handleDayStart);
+      socket.off('game:night_start', handleNightStart);
+      socket.off('game:night_stage', handleNightStage);
+      socket.off('game:mafia_consensus_failed', handleMafiaConsensusFailed);
+      socket.off('game:error', handleGameError);
+      socket.off('game:voting_start', handleVotingStart);
+      socket.off('game:vote_update', handleVoteUpdate);
+      socket.off('game:vote_tie', handleVoteTie);
+      socket.off('game:player_eliminated', handlePlayerEliminated);
+      socket.off('game:vote_skipped', handleVoteSkipped);
+      socket.off('game:over', onGameOver);
     };
-  }, [socket, onGameOver, discussionTime, showNotification, t]);
-
-  const handleNightAction = () => {
-    if (!selectedTarget || actionSent) return;
-    const actionType = currentTurn?.actionType;
-    if (!actionType) return;
-    sendNightAction(actionType, selectedTarget);
-    setActionSent(true);
-  };
+  }, [socket, onGameOver, discussionTime, showNotification, t, aliveAll.length]);
 
   const handleVote = () => { if (!selectedTarget) return; sendVote(selectedTarget); setActionSent(true); };
   const handleSkip = () => { sendVote(null); setActionSent(true); };
@@ -375,7 +393,15 @@ export default function GameScreen({ onGameOver }) {
               </motion.div>
             )}
 
-            {phase === 'voting' && (
+            {phase === 'voting' && !me?.isAlive && (
+              <motion.div className="scene-card accent-gray" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                <div className="scene-icon">👻</div>
+                <h3 className="font-black mb-2">أنت ميت</h3>
+                <p className="text-muted mb-2">القرية تصوت الآن... يمكنك المراقبة بصمت.</p>
+              </motion.div>
+            )}
+
+            {phase === 'voting' && me?.isAlive && (
               <motion.div className="scene-card accent-teal" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}>
                 {tieInfo ? (
                   <>

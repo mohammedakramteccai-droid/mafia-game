@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = import.meta.env.PROD ? window.location.origin : 'http://localhost:3001';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (import.meta.env.PROD ? window.location.origin : 'http://localhost:3001');
 
 let _socket = null; // Singleton socket outside store
 
@@ -11,8 +11,9 @@ function getOrCreateSocket(set, get) {
 
   _socket = io(SOCKET_URL, { transports: ['websocket'] });
 
-  _socket.on('connect', () => set({ connected: true }));
-  _socket.on('disconnect', () => set({ connected: false }));
+  _socket.on('connect', () => set({ connected: true, playerId: _socket.id }));
+  _socket.on('disconnect', () => set({ connected: false, playerId: null }));
+  _socket.on('connect_error', () => set({ connected: false }));
 
   _socket.on('room:update', (room) => set({ room }));
   _socket.on('room:player_joined', ({ username }) => {
@@ -72,6 +73,7 @@ export const useGameStore = create((set, get) => ({
   // Connection
   socket: null,
   connected: false,
+  playerId: null,
 
   // Player
   username: localStorage.getItem('mafia_username') || '',
@@ -118,7 +120,7 @@ export const useGameStore = create((set, get) => ({
 
   disconnect: () => {
     if (_socket) { _socket.disconnect(); _socket = null; }
-    set({ socket: null, connected: false, room: null, myCard: null, mafiaTeam: null, currentTurn: null, turnQueue: [], actionSubmitted: false });
+    set({ socket: null, connected: false, playerId: null, room: null, myCard: null, mafiaTeam: null, currentTurn: null, turnQueue: [], actionSubmitted: false });
   },
 
   // Room actions – auto-connect if needed
@@ -136,20 +138,31 @@ export const useGameStore = create((set, get) => ({
     else s.once('connect', doEmit);
   }),
 
+  randomJoin: (data) => new Promise((res) => {
+    const s = getOrCreateSocket(set, get);
+    const doEmit = () => s.emit('room:random_join', data, res);
+    if (s.connected) doEmit();
+    else s.once('connect', doEmit);
+  }),
+
   startGame: () => new Promise((res) => {
-    _socket?.emit('game:start', {}, res);
+    const s = getOrCreateSocket(set, get);
+    const doEmit = () => s.emit('game:start', {}, res);
+    if (s.connected) doEmit();
+    else s.once('connect', doEmit);
   }),
 
   sendReady: () => {
-    _socket?.emit('game:player_ready');
+    getOrCreateSocket(set, get).emit('game:player_ready');
   },
-  sendNightAction: (targetId) => {
+  sendNightAction: (targetId, actionTypeOverride) => {
     const { socket, currentTurn, turnQueue } = get();
-    if (!currentTurn) return;
+    if (!socket || !currentTurn) return;
+    const actionType = actionTypeOverride || currentTurn.actionType;
     
-    socket.emit('game:night_action', { actionType: currentTurn.actionType, targetId });
+    socket.emit('game:night_action', { actionType, targetId });
     
-    const nextQueue = turnQueue.filter(t => t.actionType !== currentTurn.actionType);
+    const nextQueue = turnQueue.filter(t => t.actionType !== actionType);
     if (nextQueue.length > 0) {
       set({ turnQueue: nextQueue, currentTurn: nextQueue[0], actionSubmitted: false });
     } else {
@@ -157,13 +170,16 @@ export const useGameStore = create((set, get) => ({
     }
   },
   sendVote: (targetId) => {
-    _socket?.emit('game:vote', { targetId });
+    getOrCreateSocket(set, get).emit('game:vote', { targetId });
   },
   startVoting: () => {
-    _socket?.emit('game:start_voting');
+    getOrCreateSocket(set, get).emit('game:start_voting');
   },
   skipVote: () => {
-    _socket?.emit('game:skip_vote');
+    getOrCreateSocket(set, get).emit('game:skip_vote');
+  },
+  returnToLobby: () => {
+    getOrCreateSocket(set, get).emit('game:return_to_lobby');
   },
 
   setRoom: (room) => set({ room }),
